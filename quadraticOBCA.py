@@ -3,8 +3,8 @@ import numpy as np
 import math as m
 
 
-def quadraticPath(initialQuadraticPath, obstacles, vehicle, max_x, max_y, min_x, min_y):
-    ds_path = downsample_smooth(initialQuadraticPath, 1, vehicle, 0.1)
+def quadraticPath(initialQuadraticPath, obstacles, vehicle, max_x, max_y, min_x, min_y, gap=1, cfg=None, sampleT=0.1):
+    ds_path = downsample_smooth(initialQuadraticPath, gap, vehicle, sampleT)
     if len(ds_path)<2:
         print('no enough path point')
         return
@@ -14,7 +14,7 @@ def quadraticPath(initialQuadraticPath, obstacles, vehicle, max_x, max_y, min_x,
         init_x += [state.x]
         init_y += [state.y]
     # obca optimization
-    optimizer = pyobca.OBCAOptimizer()
+    optimizer = pyobca.OBCAOptimizer(cfg=cfg)
     optimizer.initialize(ds_path, obstacles, max_x=max_x, max_y=max_y, min_x=min_x, min_y=min_y)
     optimizer.build_model()
     optimizer.generate_constrain()
@@ -31,10 +31,14 @@ def quadraticPath(initialQuadraticPath, obstacles, vehicle, max_x, max_y, min_x,
 
     x_opt = optimizer.x_opt.elements()
     y_opt = optimizer.y_opt.elements()
+    v_opt = optimizer.v_opt.elements()
     heading_opt = optimizer.theta_opt.elements()
     steer_opt = optimizer.steer_opt.elements()
+    a_opt = optimizer.a_opt.elements()
+    steer_rate_opt = optimizer.steerate_opt.elements()
 
-    return x_opt, y_opt, heading_opt, steer_opt
+
+    return x_opt, y_opt, v_opt, heading_opt, steer_opt, a_opt, steer_rate_opt
 
 
 

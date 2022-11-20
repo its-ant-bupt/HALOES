@@ -12,6 +12,8 @@ from case import Case
 from Vehicle import Vehicle, Path, OBCAPath
 from Show import show
 from quadraticOBCA import quadraticPath
+from pyobca.search import *
+from saveCsv import saveCsv
 
 
 def trianglePoly(x1, y1, x2, y2, x3, y3):
@@ -102,8 +104,8 @@ def findClosestVec(VehVec, obsLists):
 if __name__ == '__main__':
     case = Case.read('BenchmarkCases/Case%d.csv' % 7)
     wheelbase = 2.8
-    T = 0.05  # sampling time [s]
-    N = 30  # prediction horizon
+    T = 0.1  # sampling time [s]
+    N = 20  # prediction horizon
     x_min = -10
     x_max = 10
     y_min = -10
@@ -162,8 +164,8 @@ if __name__ == '__main__':
 
     ff = ca.Function('ff', [U, P], [X], ['input_U', 'target_state'], ['horizon_states'])
 
-    Sf = np.array([[10000.0, 0.0, 0.0, 0.0, 0.0],
-                   [0.0, 10000.0, 0.0, 0.0, 0.0],
+    Sf = np.array([[50000.0, 0.0, 0.0, 0.0, 0.0],
+                   [0.0, 50000.0, 0.0, 0.0, 0.0],
                    [0.0, 0.0, 0.0, 0.0, 0.0],
                    [0.0, 0.0, 0.0, 100000.0, 0.0],
                    [0.0, 0.0, 0.0, 0.0, 0.0]])
@@ -171,7 +173,7 @@ if __name__ == '__main__':
     Q = np.array([[1000.0, 0.0, 0.0, 0.0, 0.0],
                   [0.0, 1000.0, 0.0, 0.0, 0.0],
                   [0.0, 0.0, 0.0, 0.0, 0.0],
-                  [0.0, 0.0, 0.0, 1000.0, 0.0],
+                  [0.0, 0.0, 0.0, 5000.0, 0.0],
                   [0.0, 0.0, 0.0, 0.0, 2.0]])
 
     R = np.array([[0.0, 0.0], [0.0, 0.00]])
@@ -187,6 +189,7 @@ if __name__ == '__main__':
 
     endvec = [-16.31840796, -2.263681592, 1.061089133]
     startvec = [-11.29353234, 1.069651741, 1.015800599]
+    obca_start = startvec
     # obs cost
     obs = [[-25.03567043, -15.8687107], [-17.71684521, -2.775399527], [-16.02169786, -3.722943432],
            [-23.34052308, -16.8162546]]
@@ -331,29 +334,52 @@ if __name__ == '__main__':
 
     t_v = np.array(index_t)
 
-    with open('coTrans_threeStateObsandVehQ_single_result%s.csv' % N, 'w', encoding='utf-8', newline='') as fp:
-        # 写
-        writer = csv.writer(fp)
-        # 原点在新坐标系下的位置
-        OriVec = coTrans(endvec, [0, 0, 0])
-        for i in range(len(xx)):
-            # todo 将坐标反变换回原点
-            _tvec = [xx[i][0][0], xx[i][1][0], xx[i][3][0]]
-            resVec = coTrans(OriVec, _tvec)
-            writer.writerow([resVec[0], resVec[1], resVec[2], uu[i][0][0]])
-            final_path.x.append(resVec[0])
-            final_path.y.append(resVec[1])
-            final_path.yaw.append(resVec[2])
-            initQuadraticPath.append(OBCAPath(resVec[0], resVec[1], resVec[2]))
+    # with open('coTrans_threeStateObsandVehQ_single_result%s.csv' % N, 'w', encoding='utf-8', newline='') as fp:
+    #     # 写
+    #     writer = csv.writer(fp)
+    # 原点在新坐标系下的位置
+    OriVec = coTrans(endvec, [0, 0, 0])
+    # initQuadraticPath.append(OBCAPath(obca_start[0], obca_start[1], obca_start[2]))
+    for i in range(len(xx)):
+        # todo 将坐标反变换回原点
+        _tvec = [xx[i][0][0], xx[i][1][0], xx[i][3][0]]
+        resVec = coTrans(OriVec, _tvec)
+        # writer.writerow([resVec[0], resVec[1], resVec[2], uu[i][0][0]])
+        final_path.x.append(resVec[0])
+        final_path.y.append(resVec[1])
+        final_path.yaw.append(resVec[2])
+        initQuadraticPath.append(OBCAPath(resVec[0], resVec[1], resVec[2]))
+
+    initQuadraticPath.append(OBCAPath(endvec[0], endvec[1], endvec[2]))
 
     print(t_v.mean())
     print((time.time() - start_time) / (mpciter))
 
-    show(final_path, case, 7)
+    # show(final_path, case, 7)
+    # vehcfg = Vehicle()
+    # path_x, path_y, path_yaw, path_steer = quadraticPath(initQuadraticPath, obstacles, vehcfg, case.xmax, case.ymax,
+    #                                                      case.xmin, case.ymin)
+    # obcaPath = Path(path_x, path_y, path_yaw)
+    # show(obcaPath, case, 17)
+
+    show(final_path, case, 7, "5-state-init")
     vehcfg = Vehicle()
-    path_x, path_y, path_yaw, path_steer = quadraticPath(initQuadraticPath, obstacles, vehcfg, case.xmax, case.ymax,
-                                                         case.xmin, case.ymin)
+    cfg = VehicleConfig()
+    cfg.T = 0.2
+    gap = 1
+    sampleT = 0.2
+    path_x, path_y, path_v, path_yaw, path_steer, path_a, path_steer_rate = quadraticPath(
+                                                            initialQuadraticPath=initQuadraticPath, obstacles=obstacles,
+                                                            vehicle=vehcfg, max_x=case.xmax, max_y=case.ymax,
+                                                            min_x=case.xmin, min_y=case.ymin,
+                                                            gap=gap, cfg=cfg, sampleT=sampleT)
     obcaPath = Path(path_x, path_y, path_yaw)
-    show(obcaPath, case, 17)
+    show(obcaPath, case, 7, "5-state-obca")
+    obcaPath_5gap = Path(path_x[::5], path_y[::5], path_yaw[::5])
+    show(obcaPath_5gap, case, 7, "5-state-obca-5gap")
+    path_t = [sampleT * k for k in range(len(path_x))]
+    saveCsv(path_t=path_t, path_x=path_x, path_y=path_y, path_v=path_v, path_yaw=path_yaw, path_a=path_a,
+            path_steer=path_steer, path_steer_rate=path_steer_rate, init_x=final_path.x, init_y=final_path.y,
+            sampleT=sampleT, exp_name="5-state", path_num=7)
 
 

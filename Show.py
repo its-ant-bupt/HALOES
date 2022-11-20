@@ -23,10 +23,11 @@ def show(path, case, path_num, exp_name):
 
     for i in range(len(path.x)):
         temp = case.vehicle.create_polygon(path.x[i], path.y[i], path.yaw[i])
-        plot_polygon(temp, fill=False, color='b')
-        plt.plot(temp[:, 0], temp[:, 1], linestyle='--', linewidth=0.4, color='blue')
+        # plot_polygon(temp, fill=False, color='b')
+        plt.plot(temp[:, 0], temp[:, 1], linestyle='--', linewidth=0.15, color='blue')
         # plt.plot(path.x[i], path.y[i], marker='.', color='red', markersize=0.5)
+    plt.plot(path.x, path.y, color='red', linewidth=0.1)
 
-    plt.savefig("./Result/{}-traj{}.jpg".format(exp_name, path_num))
+    plt.savefig("./Result/{}-traj{}.svg".format(exp_name, path_num))
     plt.show()
 
