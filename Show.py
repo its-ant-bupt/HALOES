@@ -28,6 +28,6 @@ def show(path, case, path_num, exp_name):
         # plt.plot(path.x[i], path.y[i], marker='.', color='red', markersize=0.5)
     plt.plot(path.x, path.y, color='red', linewidth=0.1)
 
-    plt.savefig("./Result/{}-traj{}.svg".format(exp_name, path_num))
+    plt.savefig("./Result/case-{}/{}-traj{}.svg".format(path_num, exp_name, path_num))
     plt.show()
 

@@ -26,6 +26,10 @@ class Case:
             case.xmax = max(case.x0, case.xf) + 10
             case.ymin = min(case.y0, case.yf) - 10
             case.ymax = max(case.y0, case.yf) + 10
+            # case.xmin = min(case.x0, case.xf)
+            # case.xmax = max(case.x0, case.xf)
+            # case.ymin = min(case.y0, case.yf)
+            # case.ymax = max(case.y0, case.yf)
 
             case.obs_num = int(v[6])  # 获取障碍物数目
             num_vertexes = np.array(v[7:7 + case.obs_num], dtype=np.int)  # 获取每个障碍物的边数

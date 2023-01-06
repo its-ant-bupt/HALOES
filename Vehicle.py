@@ -10,6 +10,14 @@ class Vehicle:
         self.lb = 1.942  # width
         self.MAX_STEER = 0.75  # 方向盘最大转角
         self.MIN_CIRCLE = self.lw / math.tan(self.MAX_STEER)  # 车辆最小转角
+        self.MAX_THETA = np.pi
+        self.MIN_THETA = -np.pi
+        self.MAX_A = 1
+        self.MIN_A = -1
+        self.MAX_V = 2.5
+        self.MIN_V = -2.5
+        self.MAX_OMEGA = 0.5
+        self.MIN_OMEGA = -0.5
 
     def create_polygon(self, x, y, theta):
         cos_theta = np.cos(theta)
