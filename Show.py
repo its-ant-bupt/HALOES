@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 from pypoman import plot_polygon
 
 
-def show(path, case, path_num, exp_name):
+def show(path, case, path_num, exp_name, args=None, data_num=0):
     plt.figure()
     # plt.subplot(1, 2, 1)
     plt.xlim(case.xmin, case.xmax)
@@ -29,5 +29,7 @@ def show(path, case, path_num, exp_name):
     plt.plot(path.x, path.y, color='red', linewidth=0.1)
 
     plt.savefig("./Result/case-{}/{}-traj{}.svg".format(path_num, exp_name, path_num))
+    if args.gen_npy:
+        plt.savefig("./Result/case-{}/data_{}/{}-traj{}.svg".format(path_num, data_num, exp_name, path_num))
     plt.show()
 

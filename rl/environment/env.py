@@ -51,13 +51,14 @@ def VehObsArea(vehList, obsList):
 
 
 class Environment:
-    def __init__(self, path_num):
+    def __init__(self, path_num, args=None):
         self.case = Case.read('../../../BenchmarkCases/Case%d.csv' % path_num)
         self.vehicle = Vehicle()
         self.deltaT = 0.1  # The interval time of simulation
-        self.MaxT = 40
+        # self.MaxT = 40
+        self.MaxT = args.maxT
         self._max_episode_steps = self.MaxT / self.deltaT
-
+        self.args = args
         self.totalT = 0
 
         # ==================== Vehicle Config ==========================
@@ -83,7 +84,7 @@ class Environment:
         self.yaw_goal = self.case.thetaf
 
         self.dis2goal = (self.x_goal - self.x_pos)**2 + (self.y_goal - self.y_pos)**2
-        self.yaw_error = (self.yaw_goal - self.yaw)
+        self.yaw_error = abs(self.yaw_goal - self.yaw)
         # ==============================================================
 
         # ==================== Obstacle Config =========================
@@ -94,7 +95,7 @@ class Environment:
         # ==============================================================
 
         self.action_list = self.build_action()
-        self.observation_space = 6 + 8 + 3 * 8
+        self.observation_space = 6 + 8 + 3 * 8 + 2
 
     def reset(self, path_num):
         '''
@@ -117,7 +118,7 @@ class Environment:
         self.yaw_goal = self.case.thetaf
 
         self.dis2goal = (self.x_goal - self.x_pos) ** 2 + (self.y_goal - self.y_pos) ** 2
-        self.yaw_error = (self.yaw_goal - self.yaw)
+        self.yaw_error = abs(self.yaw_goal - self.yaw)
         # ==============================================================
 
         # ==================== Obstacle Config =========================
@@ -135,13 +136,23 @@ class Environment:
                               x_1, y_1, x_2, y_2, x_3, y_3, x_4, y_4  # 四个顶点的坐标
                               # 与车辆最近的三个障碍物的坐标
                               obs_x_1, obs_y_1, obs_x_2, obs_y_2, obs_x_3, obs_y_3, obs_x_4, obs_y_4  # i-th obstacle
+                              curr_v, curr_steer
                               ]
         '''
-        observation = [self.x_pos, self.y_pos, self.yaw,
-                       self.x_goal, self.y_goal, self.yaw_goal]
+        if self.args.relative:
+            observation = [0, 0, 0]
+        else:
+            observation = [self.x_pos, self.y_pos, self.yaw]
+        if self.args.relative:
+            observation += [self.x_goal-self.x_pos, self.y_goal-self.y_pos, self.yaw_goal-self.yaw]
+        else:
+            observation += [self.x_goal, self.y_goal, self.yaw_goal]
         polygon = self.vehicle.create_polygon(self.x_pos, self.y_pos, self.yaw)
         for i in range(4):
-            observation += [float(polygon[i][0]), float(polygon[i][1])]
+            if self.args.relative:
+                observation += [float(polygon[i][0]) - self.x_pos, float(polygon[i][1]) - self.y_pos]
+            else:
+                observation += [float(polygon[i][0]), float(polygon[i][1])]
             
         dist = []
         for i in range(len(self.obstacles)):
@@ -156,6 +167,8 @@ class Environment:
                 observation += [float(self.obstacles[index][i][0] - self.x_pos),
                                 float(self.obstacles[index][i][1] - self.y_pos)]
 
+        observation += [self.v_current, self.steer]
+
         OBS = {
             "observation": np.array(observation),
             "currentgoal": np.array([self.x_pos, self.y_pos, self.yaw]),
@@ -167,7 +180,10 @@ class Environment:
     def build_action(self):
         Amax = self.a_max
         SteerMax = self.omega_max
-        interval = [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]
+        if self.args.large_interval:
+            interval = [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]
+        else:
+            interval = [-1, 0, 1]
         actionList = {}
         num = 0
         for i in range(len(interval)):
@@ -186,14 +202,18 @@ class Environment:
             done?
         '''
         self.totalT += self.deltaT
-        a = self.action_list[int(action)][0]
-        steer_rate = self.action_list[int(action)][1]
+        if len(action) == 1:
+            a = self.action_list[int(action)][0]
+            steer_rate = self.action_list[int(action)][1]
+        else:
+            a = action[0] * self.a_max
+            steer_rate = action[1] * self.omega_max
 
         current_v = self.v_current
         self.x_pos = self.x_pos + current_v * self.deltaT * math.cos(self.yaw)
         self.y_pos = self.y_pos + current_v * self.deltaT * math.sin(self.yaw)
         self.v_current = self.v_current + a * self.deltaT
-        self.yaw = self.mod2pi(current_v * self.deltaT * math.tan(self.steer) / self.vehicle.lw)
+        self.yaw = self.mod2pi(self.yaw + current_v * self.deltaT * math.tan(self.steer) / self.vehicle.lw)
         self.steer = self.steer + steer_rate * self.deltaT
 
         reward = -1  # time loss
@@ -229,24 +249,91 @@ class Environment:
         return dis_loss, obstacle_loss
     
     def reward_goal(self, obs, goal):
-        dis = (goal[0] - obs[0])**2 + (goal[1] - obs[1])**2
+        if self.args.relative:
+            dis = (goal[0] - self.x_pos) ** 2 + (goal[1] - self.y_pos) ** 2
+            yawdelta = abs(goal[2] - self.yaw)
+        else:
+            dis = (goal[0] - obs[0])**2 + (goal[1] - obs[1])**2
+            yawdelta = abs(goal[2] - obs[2])
         delta_dis = self.dis2goal - dis
         self.dis2goal = dis
-        yawdelta = goal[2] - obs[2]
+
         delta_yaw = self.yaw_error - yawdelta
         self.yaw_error = yawdelta
-        return 0.1 * delta_dis + delta_yaw
+        dis_factor = self.args.dis_factor
+        delta_factor = self.args.delta_factor
+
+        # 根据与终点的距离再次调整距离与角度奖励值
+        # if dis <= 2:
+        #     if delta_dis < 0:
+        #         dis_factor = self.args.dis_factor
+        #     else:
+        #         dis_factor = self.args.dis_factor * 5
+        # elif dis <= 1:
+        #     if delta_dis < 0:
+        #         dis_factor = self.args.dis_factor
+        #     else:
+        #         dis_factor = self.args.dis_factor * 10
+        # elif dis <= 0.5:
+        #     if delta_dis < 0:
+        #         dis_factor = self.args.dis_factor
+        #     else:
+        #         dis_factor = self.args.dis_factor * 10
+        #
+        #     if delta_yaw < 0:
+        #         delta_factor = self.args.delta_factor
+        #     else:
+        #         delta_factor = self.args.delta_factor * 10
+
+        return dis_factor*delta_dis + delta_factor*delta_yaw
 
     def reward_obstacle(self, obs, obstacle):
-        reward = 1
+        reward = 0
         veh = [[obs[6], obs[7]], [obs[8], obs[9]], [obs[10], obs[11]], [obs[12], obs[13]]]
         for obs_i in range(len(obstacle)):
             vehObsArea = VehObsArea(veh, obstacle[obs_i])
             for area_i in range(len(vehObsArea)):
                 if vehObsArea[area_i] <= 0.001:
-                    reward -= 10
+                    reward -= self.args.obs_factor
         return reward
+    
+    def cal_reward_from_state(self, state, pre_state):
+        '''
+        Args:
+            state: observation :[x,y,yaw...](40)
+        Returns:
+            reward: 
+        '''
+        reward = -1
+        v_curr = state[-2]
+        if v_curr < self.v_min:
+            reward -= abs(v_curr - self.v_min) * 10
+        if v_curr > self.v_max:
+            reward -= abs(v_curr - self.v_max) * 10
+        _x_pos = state[0]
+        _y_pos = state[1]
+        _yaw_pos = state[2]
+        _done = False
+        if (abs(_x_pos - self.x_goal) < 0.01 and
+                abs(_y_pos - self.y_goal) < 0.01 and
+                abs(_yaw_pos - self.yaw_goal) < 0.01):
+            reward += 100
+            _done = True
+            
+        reward += self.reward_obstacle(state, self.obstacles)
 
+        pre_dis = (self.x_goal - pre_state[0])**2 + (self.y_goal - pre_state[1])**2
+        now_dis = (self.x_goal - state[0])**2 + (self.y_goal - state[1])**2
+
+        reward += self.args.dis_factor*(pre_dis - now_dis)
+
+        pre_delta = abs(self.yaw_goal - pre_state[2])
+        now_delta = abs(self.yaw_goal - state[2])
+
+        reward += self.args.delta_factor*(pre_delta - now_delta)
+        
+        return reward, _done
+        
     def mod2pi(self, yaw):
         v = yaw % (2*math.pi)
         if v > math.pi:

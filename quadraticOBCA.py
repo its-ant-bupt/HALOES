@@ -64,7 +64,7 @@ def downsample_smooth(path, gap, cfg, T=0.1):
             if ds_path[i].v < 0:
                 direction = -1
             move_distance = m.hypot((ds_path[i+1].x - ds_path[i].x), (ds_path[i+1].y - ds_path[i].y))
-            steer = np.clip(m.atan(diff_theta*cfg.lw/move_distance*direction),
+            steer = np.clip(m.atan(diff_theta*cfg.lw/(move_distance*direction + 0.0000000000001)),
                             -cfg.MAX_STEER, cfg.MAX_STEER)
             ds_path[i].steer = steer
         ds_path[-1] = path[-1]

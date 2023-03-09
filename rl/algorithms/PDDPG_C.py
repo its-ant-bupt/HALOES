@@ -3,11 +3,14 @@ import numpy as np
 import os
 
 from gym import Env
+from rl.environment.env import Environment
 
 import torch
 from torch.nn import functional as F
+import random
 
-from rl.replay_buffers.Uniform import ReplayBuffer
+from rl.replay_buffers.PER import PrioritizedReplayBuffer
+from rl.replay_buffers.utils import LinearSchedule
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -22,12 +25,12 @@ class Critic(torch.nn.Module):
         self.checkpoint = self.model_name
 
         # Architecture
-        self.H1 = torch.nn.Linear(input_dim, density, dtype=torch.float32)
-        self.H2 = torch.nn.Linear(density, density, dtype=torch.float32)
+        self.H1 = torch.nn.Linear(input_dim, density)
+        self.H2 = torch.nn.Linear(density, density)
         self.drop = torch.nn.Dropout(p=0.1)
-        self.H3 = torch.nn.Linear(density, density, dtype=torch.float32)
-        self.H4 = torch.nn.Linear(density, density, dtype=torch.float32)
-        self.Q = torch.nn.Linear(density, 1, dtype=torch.float32)
+        self.H3 = torch.nn.Linear(density, density)
+        self.H4 = torch.nn.Linear(density, density)
+        self.Q = torch.nn.Linear(density, 1)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=beta)
         self.device = device
@@ -60,12 +63,12 @@ class Actor(torch.nn.Module):
         self.checkpoint = self.model_name
 
         # Architecture
-        self.H1 = torch.nn.Linear(input_dim, density, dtype=torch.float32)
-        self.H2 = torch.nn.Linear(density, density, dtype=torch.float32)
+        self.H1 = torch.nn.Linear(input_dim, density)
+        self.H2 = torch.nn.Linear(density, density)
         self.drop = torch.nn.Dropout(p=0.1)
-        self.H3 = torch.nn.Linear(density, density, dtype=torch.float32)
-        self.H4 = torch.nn.Linear(density, density, dtype=torch.float32)
-        self.mu = torch.nn.Linear(density, n_actions, dtype=torch.float32)
+        self.H3 = torch.nn.Linear(density, density)
+        self.H4 = torch.nn.Linear(density, density)
+        self.mu = torch.nn.Linear(density, n_actions)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=alpha)
         self.device = device
@@ -78,6 +81,7 @@ class Actor(torch.nn.Module):
         value = F.relu(self.H3(value))
         value = F.relu(self.H4(value))
         action = torch.tanh(self.mu(value))
+        # action = torch.softmax(action, dim=-1)
         return action
 
     def save_model(self, path):
@@ -89,7 +93,7 @@ class Actor(torch.nn.Module):
 
 class Agent:
     def __init__(self,
-                 env: Env,
+                 env: Environment,
                  training: bool = True,
                  alpha=1e-4,
                  beta=1e-3,
@@ -103,21 +107,20 @@ class Agent:
         self.tau = tau
         self.n_games = n_games
         self.env = env
+        self.greedy = 0.9
+        self.e_greedy = 0.0001
+        self.greedy_min = 0.01
 
         self.max_size: int = (env._max_episode_steps * n_games * 2)
-        self.memory = ReplayBuffer(self.max_size)
+        self.memory = PrioritizedReplayBuffer(self.max_size, 0.6)
+        self.beta_scheduler = LinearSchedule(n_games, 0.4, 0.9)
         self.batch_size = batch_size
 
-        # Read dimension of states
-        OBS = env.observation_space.sample()
-        state, actual_goal, desired_desgoal = OBS.values()
-        state_vector = np.concatenate((state, actual_goal, desired_desgoal))
+        self.obs_shape: int = env.observation_space
+        self.n_actions: int = 2
 
-        self.obs_shape: int = state_vector.shape[0]
-        self.n_actions: int = env.action_space.shape[0]
-
-        self.max_action = torch.as_tensor(env.action_space.high, dtype=torch.float32, device=device)
-        self.min_action = torch.as_tensor(env.action_space.low, dtype=torch.float32, device=device)
+        self.max_action = torch.as_tensor(1, dtype=torch.float32, device=device)
+        self.min_action = torch.as_tensor(-1, dtype=torch.float32, device=device)
 
         self.actor = Actor(self.obs_shape, self.n_actions, alpha, name='actor')
         self.critic = Critic(self.obs_shape + self.n_actions, beta, name='critic')
@@ -126,6 +129,10 @@ class Agent:
 
         self.is_training = training
         self.noise = noise
+
+        self.per_step: int = 0
+
+        self.update_nums = 0
 
         self._update_networks()
 
@@ -152,11 +159,22 @@ class Agent:
 
         return ((action - neural_min) / (neural_max - neural_min)) * (env_max - env_min) + env_min
 
-    def choose_action(self, observation: np.ndarray) -> np.ndarray:
+    def greedy_action(self, action):
+        if random.random() < self.greedy:
+            self.greedy = max(self.greedy_min, self.greedy-self.e_greedy)
+            return torch.tensor(random.choice(list(range(self.n_actions))))
+        else:
+            self.greedy = max(self.greedy_min, self.greedy - self.e_greedy)
+            return torch.argmax(action, dim=-1)
+
+    def choose_action(self, observation: np.ndarray, evaluate: bool = False) -> np.ndarray:
         self.actor.eval()
 
         state = torch.as_tensor(observation, dtype=torch.float32, device=device)
         action = self.actor.forward(state)
+
+        # 分类动作使用greedy生成探索东所，连续动作使用噪声
+        # action = self.greedy_action(action)
 
         if self.is_training:
             action = self._add_exploration_noise(action)
@@ -177,17 +195,19 @@ class Agent:
         self.critic.load_model(path)
         self.target_critic.load_model(path)
 
-    def optimize(self) -> None:
+    def optimize(self, tb_summary=None):
         if len(self.memory._storage) < self.batch_size:
             return
 
-        state, action, reward, new_state, done = self.memory.sample(self.batch_size)
+        beta = self.beta_scheduler.value(self.per_step)
+        state, action, reward, new_state, done, weights, indices = self.memory.sample(self.batch_size, beta)
 
         state = torch.as_tensor(np.vstack(state), dtype=torch.float32, device=device)
         action = torch.as_tensor(np.vstack(action), dtype=torch.float32, device=device)
-        done = torch.as_tensor(np.vstack(done), dtype=torch.float32, device=device)
+        done = torch.as_tensor(np.vstack(1 - done), dtype=torch.float32, device=device)
         reward = torch.as_tensor(np.vstack(reward), dtype=torch.float32, device=device)
         new_state = torch.as_tensor(np.vstack(new_state), dtype=torch.float32, device=device)
+        weights = torch.as_tensor(np.hstack(weights), dtype=torch.float32, device=device)
 
         self.target_actor.eval()
         self.target_critic.eval()
@@ -195,20 +215,44 @@ class Agent:
         self.actor.train()
 
         Q_target = self.target_critic.forward(new_state, self.target_actor.forward(new_state))
-        Y = reward + (1.0 - done) * self.gamma * Q_target
+        Y = reward + (done * self.gamma * Q_target)
         Q = self.critic.forward(state, action)
         TD_errors = torch.sub(Y, Q).squeeze(dim=-1)
 
-        critic_loss = F.huber_loss(TD_errors, torch.zeros_like(TD_errors))
+        weighted_TD_Errors = TD_errors * torch.sqrt(weights)
+        critic_loss = smooth_l1_loss(weighted_TD_Errors, torch.zeros_like(weighted_TD_Errors))
+
+
 
         self.critic.optimizer.zero_grad()
         critic_loss.backward()
         self.critic.optimizer.step()
+        tb_summary.add_scalar('critic_loss', critic_loss.detach().cpu(), self.update_nums)
 
         # Compute & Update Actor losses
         actor_loss = torch.mean(-1.0 * self.critic.forward(state, self.actor(state)))
         self.actor.optimizer.zero_grad()
+
+
         actor_loss.backward()
         self.actor.optimizer.step()
 
+        tb_summary.add_scalar('actor_loss', actor_loss.detach().cpu(), self.update_nums)
+
+        td_errors: np.ndarray = TD_errors.detach().cpu().numpy()
+        new_priorities = np.abs(td_errors) + 1e-6
+        self.memory.update_priorities(indices, new_priorities)
+        self.update_nums += 1
+
         self._update_networks(self.tau)
+
+
+def smooth_l1_loss(input, target, reduce=True, normalizer=1.0):
+    beta = 1.
+    diff = torch.abs(input - target)
+    cond = diff < beta
+    loss = torch.where(cond, 0.5 * diff ** 2 / beta, diff - 0.5 * beta)
+    if reduce:
+        return torch.sum(loss) / normalizer
+    return torch.sum(loss, dim=1) / normalizer
+

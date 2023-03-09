@@ -40,6 +40,10 @@ class OBCAOptimizer:
         self.N = len(init_guess)
 
         self.obstacles = obs
+        for i in range(len(self.obstacles)):
+            for j in range(len(self.obstacles[i])):
+                self.obstacles[i][j] = self.obstacles[i][j].tolist()
+
         for state in init_guess:
             self.x0 += [[state.x, state.y, state.v,
                          state.heading, state.steer]]
@@ -170,14 +174,14 @@ class OBCAOptimizer:
                 mu = vertcat(self.MU[:, len(self.obstacles)*i+index])
                 index += 1
                 # 公式10的第四项约束
-                self.constrains += [dot(A.T@lamb, A.T@lamb)]
+                self.constrains += [dot(vertcat(A.T)@lamb, vertcat(A.T)@lamb)]
                 self.lbg += [0]
                 self.ubg += [1]
                 # 穿透距离（pen）
-                self.constrains += [self.G.T@mu+(r.T@A.T)@lamb]
+                self.constrains += [self.G.T@mu+(r.T@vertcat(A.T))@lamb]
                 self.lbg += [0, 0]
                 self.ubg += [0, 0]
                 # 有符号距离（dist）
-                self.constrains += [(-dot(self.g, mu)+dot(A@t-b, lamb))]
+                self.constrains += [(-dot(self.g, mu)+dot(vertcat(A)@t-vertcat(b), lamb))]
                 self.lbg += [0.001]
                 self.ubg += [100000]
